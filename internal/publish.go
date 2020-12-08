@@ -21,12 +21,30 @@ import (
 	"github.com/docker/distribution/reference"
 	"github.com/docker/docker/builder/dockerignore"
 	"github.com/docker/docker/client"
+	"github.com/opencontainers/go-digest"
 )
 
-func PinServiceImages(cli *client.Client, ctx context.Context, services map[string]interface{}, proj *compose.Project) error {
+func getContainerConfig(mansvc distribution.ManifestService, blobStore distribution.BlobStore, ctx context.Context, configDigest digest.Digest) ([]byte, error) {
+	mm, e := mansvc.Get(ctx, configDigest)
+	if e != nil {
+		return nil, e
+	}
+	dgst := mm.(*schema2.DeserializedManifest).Manifest.Config.Digest
+	return blobStore.Get(ctx, dgst)
+}
+
+type ContainerConfig struct {
+	Platform string
+	Config   []byte
+}
+type ServiceConfigs map[string][]ContainerConfig
+
+func PinServiceImages(cli *client.Client, ctx context.Context, services map[string]interface{}, proj *compose.Project) (ServiceConfigs, error) {
 	regc := NewRegistryClient()
 
-	return proj.WithServices(nil, func(s compose.ServiceConfig) error {
+	configs := make(ServiceConfigs)
+
+	return configs, proj.WithServices(nil, func(s compose.ServiceConfig) error {
 		name := s.Name
 		obj := services[name]
 		svc, ok := obj.(map[string]interface{})
@@ -49,6 +67,7 @@ func PinServiceImages(cli *client.Client, ctx context.Context, services map[stri
 		if err != nil {
 			return err
 		}
+
 		namedTagged, ok := named.(reference.Tagged)
 		if !ok {
 			return fmt.Errorf("Invalid image reference(%s): Images must be tagged. e.g %s:stable", image, image)
@@ -67,23 +86,40 @@ func PinServiceImages(cli *client.Client, ctx context.Context, services map[stri
 			return fmt.Errorf("Unable to find image manifest(%s): %s", image, err)
 		}
 
+		blobStore := repo.Blobs(ctx)
+
 		// TODO - we should find the intersection of platforms so
 		// that we can denote the platforms this app can run on
 		pinned := reference.Domain(named) + "/" + reference.Path(named) + "@" + desc.Digest.String()
 
 		switch mani := man.(type) {
 		case *manifestlist.DeserializedManifestList:
+			containerConfigs := make([]ContainerConfig, len(mani.Manifests))
 			fmt.Printf("  | ")
 			for i, m := range mani.Manifests {
 				if i != 0 {
 					fmt.Printf(", ")
 				}
-				fmt.Printf(m.Platform.Architecture)
+				plat := m.Platform.Architecture
 				if m.Platform.Architecture == "arm" {
-					fmt.Printf(m.Platform.Variant)
+					plat += m.Platform.Variant
 				}
+				fmt.Printf(plat)
+				cfg, e := getContainerConfig(mansvc, blobStore, ctx, m.Descriptor.Digest)
+				if e != nil {
+					return fmt.Errorf("Unable to container config for %s: %v", plat, e)
+				}
+				containerConfigs = append(containerConfigs, ContainerConfig{Platform: plat, Config: cfg})
 			}
+			configs[name] = containerConfigs
 		case *schema2.DeserializedManifest:
+			cfg, e := getContainerConfig(mansvc, blobStore, ctx, desc.Digest)
+			if e != nil {
+				return fmt.Errorf("Unable to container config: %v", e)
+			}
+			configs[name] = []ContainerConfig{
+				{Config: cfg},
+			}
 			break
 		default:
 			return fmt.Errorf("Unexpected manifest: %v", mani)

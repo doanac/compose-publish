@@ -120,8 +120,16 @@ func doPublish(file, target, digestFile string, dryRun bool) error {
 	if !ok {
 		return errors.New("Unable to find 'services' section of compose file")
 	}
-	if err := internal.PinServiceImages(cli, ctx, svcs.(map[string]interface{}), proj); err != nil {
+	configs, err := internal.PinServiceImages(cli, ctx, svcs.(map[string]interface{}), proj)
+	if err != nil {
 		return err
+	}
+	for svc, cfgs := range configs {
+		fmt.Println("= svc", svc)
+		for _, cfg := range cfgs {
+			fmt.Printf("%s ", cfg.Platform)
+		}
+		fmt.Println()
 	}
 
 	fmt.Println("= Publishing app...")
