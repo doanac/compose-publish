@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,13 +145,27 @@ func getIgnores(appDir string) []string {
 	return ignores
 }
 
-func createTgz(composeContent []byte, appDir string) ([]byte, error) {
+func createTgz(composeContent []byte, appDir string, specFiles map[string][]byte) ([]byte, error) {
 	var buf bytes.Buffer
 	gzw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gzw)
 
 	ignores := getIgnores(appDir)
 	warned := make(map[string]bool)
+
+	for name, content := range specFiles {
+		header := tar.Header{
+			Name: ".specs/" + name,
+			Size: int64(len(content)),
+			Mode: 0755,
+		}
+		if err := tw.WriteHeader(&header); err != nil {
+			return nil, err
+		}
+		if _, err := tw.Write(content); err != nil {
+			return nil, err
+		}
+	}
 
 	err := filepath.Walk(appDir, func(file string, fi os.FileInfo, err error) error {
 		if err != nil {
@@ -228,13 +243,13 @@ func createTgz(composeContent []byte, appDir string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func CreateApp(ctx context.Context, config map[string]interface{}, target string, dryRun bool) (string, error) {
+func CreateApp(ctx context.Context, config map[string]interface{}, target string, specFiles map[string][]byte, dryRun bool) (string, error) {
 	pinned, err := yaml.Marshal(config)
 	if err != nil {
 		return "", err
 	}
 
-	buff, err := createTgz(pinned, "./")
+	buff, err := createTgz(pinned, "./", specFiles)
 	if err != nil {
 		return "", err
 	}
@@ -256,6 +271,9 @@ func CreateApp(ctx context.Context, config map[string]interface{}, target string
 
 	if dryRun {
 		fmt.Println("Skipping publishing for dryrun")
+		if err := ioutil.WriteFile("compose-bundle.tgz", buff, 0755); err != nil {
+			return "", nil
+		}
 		return "", nil
 	}
 

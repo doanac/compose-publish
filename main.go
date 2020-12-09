@@ -124,16 +124,15 @@ func doPublish(file, target, digestFile string, dryRun bool) error {
 	if err != nil {
 		return err
 	}
-	for svc, cfgs := range configs {
-		fmt.Println("= svc", svc)
-		for _, cfg := range cfgs {
-			fmt.Printf("%s ", cfg.Platform)
-		}
-		fmt.Println()
+
+	fmt.Println("= Creating runc specs...")
+	specFiles, err := internal.CreateSpecs(proj, configs)
+	if err != nil {
+		return err
 	}
 
 	fmt.Println("= Publishing app...")
-	dgst, err := internal.CreateApp(ctx, config, target, dryRun)
+	dgst, err := internal.CreateApp(ctx, config, target, specFiles, dryRun)
 	if err != nil {
 		return err
 	}
